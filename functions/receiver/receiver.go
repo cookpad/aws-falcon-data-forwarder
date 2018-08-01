@@ -106,6 +106,9 @@ type FalconLogFiles struct {
 	CheckSum string `json:"checksum"`
 }
 
+// ReceiveMessages receives SQS message from Falcon side and invokes msgHandler per message.
+// In this method, not use channel because SQS queue deletion must be after handling messages
+// to keep idempotence.
 func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *FalconMessage) error) error {
 	cred := credentials.NewStaticCredentials(awsKey, awsSecret, "")
 

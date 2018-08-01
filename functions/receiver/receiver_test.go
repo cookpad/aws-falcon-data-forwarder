@@ -92,32 +92,18 @@ func TestHandler(t *testing.T) {
 
 func TestReceiver(t *testing.T) {
 	cfg := loadConfig()
+	dataKey := "data/test_data.gz"
 
 	sampleMessage := `{
-		"cid": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"cid": "abcdefghijklmn0123456789",
 		"timestamp": 1492726639137,
 		"fileCount": 4,
 		"totalSize": 349986220,
-		"bucket": "cs-prod-cannon-xxxxxxxxxxxxxxxx",
-		"pathPrefix": "data/f0714ca5-3689-448d-b5cc-582a6f7a56b1",
+		"bucket": "` + cfg.S3Bucket + `",
+		"pathPrefix": "` + cfg.S3Prefix + `",
 		"files": [
 		  {
-			"path": "data/f0714ca5-3689-448d-b5cc-582a6f7a56b1/part-00000.gz",
-			"size": 90506436,
-			"checksum": "69fe068dd7d115ebdc21ed4181b4cd79"
-		  },
-		  {
-			"path": "data/f0714ca5-3689-448d-b5cc-582a6f7a56b1/part-00001.gz",
-			"size": 86467595,
-			"checksum": "7d0185c02e0d50f8b8584729be64318b"
-		  },
-		  {
-			"path": "data/f0714ca5-3689-448d-b5cc-582a6f7a56b1/part-00002.gz",
-			"size": 83893709,
-			"checksum": "7c36641d7bb3e1bb4526ddc4c1655017"
-		  },
-		  {
-			"path": "data/f0714ca5-3689-448d-b5cc-582a6f7a56b1/part-00003.gz",
+			"path": "` + cfg.S3Prefix + dataKey + `",
 			"size": 89118480,
 			"checksum": "d0f566f37295e46f28c75f71ddce9422"
 		  }
@@ -147,6 +133,9 @@ func TestReceiver(t *testing.T) {
 	msgCount := 0
 	msgHandler := func(msg *receiver.FalconMessage) error {
 		msgCount++
+		assert.Equal(t, "abcdefghijklmn0123456789", msg.CID)
+		assert.Equal(t, 1, len(msg.Files))
+		assert.Equal(t, cfg.S3Prefix+dataKey, msg.Files[0].Path)
 		return nil
 	}
 
