@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/pkg/errors"
 )
@@ -20,7 +22,9 @@ func main() {
 	lambda.Start(handleRequest)
 }
 
-type Event struct{}
+type lambdaEvent struct{}
+
+var falconAwsRegion = "us-west-1"
 
 func decryptKMS(encrypted string) (string, error) {
 	ssn := session.Must(session.NewSessionWithOptions(session.Options{
@@ -48,7 +52,7 @@ func decryptKMS(encrypted string) (string, error) {
 	return string(result.Plaintext), nil
 }
 
-func handleRequest(ctx context.Context, event Event) (string, error) {
+func handleRequest(ctx context.Context, event lambdaEvent) (string, error) {
 	args, err := BuildArgs()
 	if err != nil {
 		return "", err
@@ -166,8 +170,47 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 	return nil
 }
 
+func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, dstBucket, dstKey string) error {
+	// Download
+	srcSsn := session.Must(session.NewSession(&aws.Config{
+		Region:      aws.String(srcRegion),
+		Credentials: credentials.NewStaticCredentials(awsKey, awsSecret, ""),
+	}))
+	downSrv := s3.New(srcSsn)
+	getInput := &s3.GetObjectInput{
+		Bucket: aws.String(srcBucket),
+		Key:    aws.String(srcKey),
+	}
+
+	getResult, err := downSrv.GetObject(getInput)
+	if err != nil {
+		return errors.Wrap(err, "Fail to download data from Falcon")
+	}
+
+	// Upload
+	dstSsn := session.Must(session.NewSession(&aws.Config{
+		Region: aws.String(dstRegion),
+	}))
+	uploader := s3manager.NewUploader(dstSsn)
+	_, err = uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(dstBucket),
+		Key:    aws.String(dstKey),
+		Body:   getResult.Body,
+	})
+	if err != nil {
+		return errors.Wrap(err, "Fail to upload data to your bucket")
+	}
+
+	return nil
+}
+
 func Handler(args *Args) (resp string, err error) {
 	forwardMessage := func(msg *FalconMessage) error {
+		for _, f := range msg.Files {
+			ForwardS3File(args.AwsKey, args.AwsSecret,
+				falconAwsRegion, msg.Bucket, f.Path,
+				args.S3Region, args.S3Bucket, args.S3Prefix+f.Path)
+		}
 		return nil
 	}
 
