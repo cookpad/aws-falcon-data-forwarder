@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ''
+Parameters:
+  RoleArn:
+    Type: String
+  S3Bucket:
+    Type: String
+  S3Prefix:
+    Type: String
+  S3Region:
+    Type: String
+  SqsURL:
+    Type: String
+  EncSqsAwsKey:
+    Type: String
+  EncSqsAwsSecret:
+    Type: String
+Resources:
+  SqsReceiver:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: build
+      Handler: receiver
+      Runtime: go1.x
+      Timeout: 30
+      MemorySize: 128
+      Role:
+        Ref: RoleArn
+      Environment:
+        Variables:
+          S3_BUCKET:
+            Ref: S3Bucket
+          S3_PREFIX:
+            Ref: S3Prefix
+          S3_REGION:
+            Ref: S3Region
+          SQS_URL:
+            Ref: SqsURL
+          ENC_SQS_AWS_KEY:
+            Ref: EncSqsAwsKey
+          ENC_SQS_AWS_SECRET:
+            Ref: EncSqsAwsSecret
