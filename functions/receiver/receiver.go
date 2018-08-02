@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"os"
+	"regexp"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 
@@ -110,15 +112,39 @@ type FalconLogFiles struct {
 	CheckSum string `json:"checksum"`
 }
 
+func sqsURLtoRegion(url string) (string, error) {
+	urlPattern := []string{
+		// https://sqs.ap-northeast-1.amazonaws.com/21xxxxxxxxxxx/test-queue
+		`https://sqs\.([a-z0-9\-]+)\.amazonaws\.com`,
+
+		// https://us-west-1.queue.amazonaws.com/2xxxxxxxxxx/test-queue
+		`https://([a-z0-9\-]+)\.queue\.amazonaws\.com`,
+	}
+
+	for _, ptn := range urlPattern {
+		re := regexp.MustCompile(ptn)
+		group := re.FindSubmatch([]byte(url))
+		if len(group) == 2 {
+			return string(group[1]), nil
+		}
+	}
+
+	return "", errors.New("unsupported SQS URL syntax")
+}
+
 // ReceiveMessages receives SQS message from Falcon side and invokes msgHandler per message.
 // In this method, not use channel because SQS queue deletion must be after handling messages
 // to keep idempotence.
 func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *FalconMessage) error) error {
-	cred := credentials.NewStaticCredentials(awsKey, awsSecret, "")
 
-	ssn := session.Must(session.NewSessionWithOptions(session.Options{
-		Config:            aws.Config{Credentials: cred},
-		SharedConfigState: session.SharedConfigEnable,
+	sqsRegion, err := sqsURLtoRegion(sqsURL)
+	if err != nil {
+		return err
+	}
+
+	ssn := session.Must(session.NewSession(&aws.Config{
+		Region:      aws.String(sqsRegion),
+		Credentials: credentials.NewStaticCredentials(awsKey, awsSecret, ""),
 	}))
 
 	queue := sqs.New(ssn)
@@ -140,6 +166,8 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 		if err != nil {
 			return errors.Wrap(err, "SQS recv error")
 		}
+
+		log.Printf("recv queue, messages = %d", len(result.Messages))
 
 		if len(result.Messages) == 0 {
 			break
@@ -206,7 +234,9 @@ func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, d
 
 func Handler(args *Args) (resp string, err error) {
 	forwardMessage := func(msg *FalconMessage) error {
+		// log.Printf("message = %v\n", msg)
 		for _, f := range msg.Files {
+			log.Printf("  forwarding: %v\n", f)
 			ForwardS3File(args.AwsKey, args.AwsSecret,
 				falconAwsRegion, msg.Bucket, f.Path,
 				args.S3Region, args.S3Bucket, args.S3Prefix+f.Path)

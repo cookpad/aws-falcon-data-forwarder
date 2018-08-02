@@ -23,8 +23,8 @@ Resources:
       CodeUri: build
       Handler: receiver
       Runtime: go1.x
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 300
+      MemorySize: 1024
       Role:
         Ref: RoleArn
       Environment:
@@ -41,3 +41,8 @@ Resources:
             Ref: EncSqsAwsKey
           ENC_SQS_AWS_SECRET:
             Ref: EncSqsAwsSecret
+      Events:
+        EveryMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: 'rate(1 minute)'
