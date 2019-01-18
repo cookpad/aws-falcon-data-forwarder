@@ -28,7 +28,7 @@ Make sure that you need CrowdStrike Falcon and Data Replicator service.
 
 ## Setup
 
-### Encrypt AWS API Key adn Secret
+### Encrypt AWS API Key and Secret
 
 You need to encrypt AWS API Key (AWS_ACCESS_KEY_ID) and Secret (AWS_SECRET_ACCESS_KEY) provided CrowdStrike Falcon. Assuming AWS_ACCESS_KEY_ID is `ABCDEFG` and AWS_ACCESS_KEY_ID is `STUVWXYZ`.
 
