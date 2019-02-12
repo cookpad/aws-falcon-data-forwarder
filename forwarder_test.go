@@ -16,18 +16,17 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/sqs"
-	receiver "github.com/m-mizutani/aws-falcon-data-forwarder/functions/receiver"
+	forwarder "github.com/m-mizutani/aws-falcon-data-forwarder"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type Config struct {
-	S3Bucket        string
-	S3Prefix        string
-	S3Region        string
-	SqsURL          string
-	EncSqsAwsKey    string
-	EncSqsAwsSecret string
+	S3Bucket  string
+	S3Prefix  string
+	S3Region  string
+	SqsURL    string
+	SecretArn string
 }
 
 func loadConfig() Config {
@@ -63,35 +62,26 @@ func loadConfig() Config {
 func TestBuildConfig(t *testing.T) {
 	// Mainly test to decrypt key
 	cfg := loadConfig()
-	os.Setenv("ENC_SQS_AWS_KEY", cfg.EncSqsAwsKey)
-	os.Setenv("ENC_SQS_AWS_SECRET", cfg.EncSqsAwsSecret)
-	defer os.Unsetenv("ENC_SQS_AWS_KEY")
-	defer os.Unsetenv("ENC_SQS_AWS_SECRET")
+	os.Setenv("SECRET_ARN", cfg.SecretArn)
+	defer os.Unsetenv("SECRET_ARN")
 
-	args, err := receiver.BuildArgs()
+	_, err := forwarder.BuildArgs()
 
 	assert.NoError(t, err)
-	assert.NotEqual(t, "", args.AwsKey)
-	assert.NotEqual(t, 0, len(args.AwsKey))
-	assert.NotEqual(t, "", args.AwsSecret)
-	assert.NotEqual(t, 0, len(args.AwsSecret))
 }
 
 func TestHandler(t *testing.T) {
 	cfg := loadConfig()
 
-	os.Setenv("ENC_SQS_AWS_KEY", cfg.EncSqsAwsKey)
-	os.Setenv("ENC_SQS_AWS_SECRET", cfg.EncSqsAwsSecret)
+	os.Setenv("SECRET_ARN", cfg.SecretArn)
+	defer os.Unsetenv("SECRET_ARN")
 	os.Setenv("SQS_URL", cfg.SqsURL)
-	defer os.Unsetenv("ENC_SQS_AWS_KEY")
-	defer os.Unsetenv("ENC_SQS_AWS_SECRET")
 
-	args, err := receiver.BuildArgs()
+	args, err := forwarder.BuildArgs()
 	require.NoError(t, err)
 
-	result, err := receiver.Handler(args)
+	err = forwarder.Handler(args)
 	require.NoError(t, err)
-	assert.Equal(t, "", result)
 }
 
 func TestReceiver(t *testing.T) {
@@ -127,15 +117,14 @@ func TestReceiver(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	os.Setenv("ENC_SQS_AWS_KEY", cfg.EncSqsAwsKey)
-	os.Setenv("ENC_SQS_AWS_SECRET", cfg.EncSqsAwsSecret)
-	defer os.Unsetenv("ENC_SQS_AWS_KEY")
-	defer os.Unsetenv("ENC_SQS_AWS_SECRET")
-	args, err := receiver.BuildArgs()
+	os.Setenv("SECRET_ARN", cfg.SecretArn)
+	defer os.Unsetenv("SECRET_ARN")
+
+	args, err := forwarder.BuildArgs()
 	require.NoError(t, err)
 
 	msgCount := 0
-	msgHandler := func(msg *receiver.FalconMessage) error {
+	msgHandler := func(msg *forwarder.FalconMessage) error {
 		msgCount++
 		assert.Equal(t, "abcdefghijklmn0123456789", msg.CID)
 		assert.Equal(t, 1, len(msg.Files))
@@ -143,7 +132,7 @@ func TestReceiver(t *testing.T) {
 		return nil
 	}
 
-	err = receiver.ReceiveMessages(cfg.SqsURL, args.AwsKey, args.AwsSecret, msgHandler)
+	err = forwarder.ReceiveMessages(cfg.SqsURL, args.AwsKey, args.AwsSecret, msgHandler)
 	require.NoError(t, err)
 	assert.Equal(t, 1, msgCount)
 }
@@ -151,11 +140,9 @@ func TestReceiver(t *testing.T) {
 func TestForwarder(t *testing.T) {
 	cfg := loadConfig()
 
-	os.Setenv("ENC_SQS_AWS_KEY", cfg.EncSqsAwsKey)
-	os.Setenv("ENC_SQS_AWS_SECRET", cfg.EncSqsAwsSecret)
-	defer os.Unsetenv("ENC_SQS_AWS_KEY")
-	defer os.Unsetenv("ENC_SQS_AWS_SECRET")
-	args, err := receiver.BuildArgs()
+	os.Setenv("SECRET_ARN", cfg.SecretArn)
+	defer os.Unsetenv("SECRET_ARN")
+	args, err := forwarder.BuildArgs()
 
 	ssn := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
@@ -176,7 +163,7 @@ func TestForwarder(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = receiver.ForwardS3File(args.AwsKey, args.AwsSecret,
+	err = forwarder.ForwardS3File(args.AwsKey, args.AwsSecret,
 		cfg.S3Region, cfg.S3Bucket, srcKey,
 		cfg.S3Region, cfg.S3Bucket, dstKey)
 

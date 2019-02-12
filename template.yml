@@ -12,10 +12,9 @@ Parameters:
     Type: String
   SqsURL:
     Type: String
-  EncSqsAwsKey:
+  SecretArn:
     Type: String
-  EncSqsAwsSecret:
-    Type: String
+
 Resources:
   SqsReceiver:
     Type: AWS::Serverless::Function
@@ -37,10 +36,8 @@ Resources:
             Ref: S3Region
           SQS_URL:
             Ref: SqsURL
-          ENC_SQS_AWS_KEY:
-            Ref: EncSqsAwsKey
-          ENC_SQS_AWS_SECRET:
-            Ref: EncSqsAwsSecret
+          SECRET_ARN:
+            Ref: SecretArn
       Events:
         EveryMinutes:
           Type: Schedule

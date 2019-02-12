@@ -2,98 +2,119 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/pkg/errors"
+
+	"github.com/sirupsen/logrus"
 )
 
+var logger = logrus.New()
+
 func main() {
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	logger.SetLevel(logrus.InfoLevel)
 	lambda.Start(handleRequest)
 }
 
-type lambdaEvent struct{}
-
-var falconAwsRegion = "us-west-1"
-
-func decryptKMS(encrypted string) (string, error) {
-	ssn := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-
-	// ssn := session.Must(session.NewSession(&aws.Config{
-	// Region: aws.String(region),
-
-	encBin, err := base64.StdEncoding.DecodeString(encrypted)
-	if err != nil {
-		return "", errors.Wrap(err, "Fail to decode")
-	}
-
-	svc := kms.New(ssn)
-	input := &kms.DecryptInput{
-		CiphertextBlob: encBin,
-	}
-
-	result, err := svc.Decrypt(input)
-	if err != nil {
-		return "", errors.Wrap(err, "Fail to decrypt")
-	}
-
-	return string(result.Plaintext), nil
-}
-
-func handleRequest(ctx context.Context, event lambdaEvent) (string, error) {
+func handleRequest(ctx context.Context, event struct{}) error {
 	args, err := BuildArgs()
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	return Handler(args)
 }
 
+func Handler(args Args) error {
+	forwardMessage := func(msg *FalconMessage) error {
+		// log.Printf("message = %v\n", msg)
+		for _, f := range msg.Files {
+			logger.WithField("f", f).Info("forwarding")
+
+			ForwardS3File(args.AwsKey, args.AwsSecret,
+				falconAwsRegion, msg.Bucket, f.Path,
+				args.S3Region, args.S3Bucket, args.S3Prefix+f.Path)
+		}
+		return nil
+	}
+
+	err := ReceiveMessages(args.SqsURL, args.FalconAwsKey, args.FalconAwsSecret,
+		forwardMessage)
+	return err
+}
+
+var falconAwsRegion = "us-west-1"
+
+func getSecretValues(secretArn string, values interface{}) error {
+	// sample: arn:aws:secretsmanager:ap-northeast-1:1234567890:secret:mytest
+	arn := strings.Split(secretArn, ":")
+	if len(arn) != 7 {
+		return errors.New(fmt.Sprintf("Invalid SecretsManager ARN format: %s", secretArn))
+	}
+	region := arn[3]
+
+	ssn := session.Must(session.NewSession(&aws.Config{
+		Region: aws.String(region),
+	}))
+	mgr := secretsmanager.New(ssn)
+
+	result, err := mgr.GetSecretValue(&secretsmanager.GetSecretValueInput{
+		SecretId: aws.String(secretArn),
+	})
+
+	if err != nil {
+		return errors.Wrap(err, "Fail to retrieve secret values")
+	}
+
+	err = json.Unmarshal([]byte(*result.SecretString), values)
+	if err != nil {
+		return errors.Wrap(err, "Fail to parse secret values as JSON")
+	}
+
+	return nil
+}
+
 // BuildArgs builds argument of receiver from environment variables.
-func BuildArgs() (args *Args, err error) {
-	awsKey, err := decryptKMS(os.Getenv("ENC_SQS_AWS_KEY"))
+func BuildArgs() (Args, error) {
+	args := Args{
+		S3Bucket: os.Getenv("S3_BUCKET"),
+		S3Prefix: os.Getenv("S3_PREFIX"),
+		S3Region: os.Getenv("S3_REGION"),
+		SqsURL:   os.Getenv("SQS_URL"),
+	}
+
+	err := getSecretValues(os.Getenv("SECRET_ARN"), &args)
 	if err != nil {
-		return
+		return args, errors.Wrap(err, "Fail to retrieve secret values")
 	}
 
-	awsSecret, err := decryptKMS(os.Getenv("ENC_SQS_AWS_SECRET"))
-	if err != nil {
-		return
-	}
-
-	args = &Args{
-		S3Bucket:  os.Getenv("S3_BUCKET"),
-		S3Prefix:  os.Getenv("S3_PREFIX"),
-		S3Region:  os.Getenv("S3_REGION"),
-		AwsKey:    awsKey,
-		AwsSecret: awsSecret,
-		SqsURL:    os.Getenv("SQS_URL"),
-	}
-
-	return
+	return args, nil
 }
 
 type Args struct {
-	S3Bucket  string
-	S3Prefix  string
-	S3Region  string
-	AwsKey    string
-	AwsSecret string
-	SqsURL    string
+	S3Bucket        string
+	S3Prefix        string
+	S3Region        string
+	AwsKey          string
+	AwsSecret       string
+	SqsURL          string
+	FalconAwsKey    string `json:"falcon_aws_key"`
+	FalconAwsSecret string `json:"falcon_aws_secret"`
 }
 
 type FalconMessage struct {
@@ -142,12 +163,14 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 		return err
 	}
 
-	ssn := session.Must(session.NewSession(&aws.Config{
-		Region:      aws.String(sqsRegion),
-		Credentials: credentials.NewStaticCredentials(awsKey, awsSecret, ""),
-	}))
+	cfg := aws.Config{Region: aws.String(sqsRegion)}
+	if awsKey != "" && awsSecret != "" {
+		cfg.Credentials = credentials.NewStaticCredentials(awsKey, awsSecret, "")
+	} else {
+		logger.Warn("AWS Key and secret are not set, use role permission")
+	}
 
-	queue := sqs.New(ssn)
+	queue := sqs.New(session.Must(session.NewSession(&cfg)))
 
 	for {
 		result, err := queue.ReceiveMessage(&sqs.ReceiveMessageInput{
@@ -199,12 +222,16 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 }
 
 func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, dstBucket, dstKey string) error {
+
+	cfg := aws.Config{Region: aws.String(srcRegion)}
+	if awsKey != "" && awsSecret != "" {
+		cfg.Credentials = credentials.NewStaticCredentials(awsKey, awsSecret, "")
+	} else {
+		logger.Warn("AWS Key and secret are not set, use role permission")
+	}
+
 	// Download
-	srcSsn := session.Must(session.NewSession(&aws.Config{
-		Region:      aws.String(srcRegion),
-		Credentials: credentials.NewStaticCredentials(awsKey, awsSecret, ""),
-	}))
-	downSrv := s3.New(srcSsn)
+	downSrv := s3.New(session.Must(session.NewSession(&cfg)))
 	getInput := &s3.GetObjectInput{
 		Bucket: aws.String(srcBucket),
 		Key:    aws.String(srcKey),
@@ -230,20 +257,4 @@ func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, d
 	}
 
 	return nil
-}
-
-func Handler(args *Args) (resp string, err error) {
-	forwardMessage := func(msg *FalconMessage) error {
-		// log.Printf("message = %v\n", msg)
-		for _, f := range msg.Files {
-			log.Printf("  forwarding: %v\n", f)
-			ForwardS3File(args.AwsKey, args.AwsSecret,
-				falconAwsRegion, msg.Bucket, f.Path,
-				args.S3Region, args.S3Bucket, args.S3Prefix+f.Path)
-		}
-		return nil
-	}
-
-	err = ReceiveMessages(args.SqsURL, args.AwsKey, args.AwsSecret, forwardMessage)
-	return
 }
