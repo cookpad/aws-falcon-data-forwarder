@@ -142,7 +142,6 @@ func TestForwarder(t *testing.T) {
 
 	os.Setenv("SECRET_ARN", cfg.SecretArn)
 	defer os.Unsetenv("SECRET_ARN")
-	args, err := forwarder.BuildArgs()
 
 	ssn := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
@@ -156,17 +155,28 @@ func TestForwarder(t *testing.T) {
 	// fmt.Println(srcKey)
 
 	// Upload the file to S3.
-	_, err = uploader.Upload(&s3manager.UploadInput{
+	_, err := uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(cfg.S3Bucket),
 		Key:    aws.String(srcKey),
 		Body:   strings.NewReader("five timeless words"),
 	})
 	require.NoError(t, err)
 
-	err = forwarder.ForwardS3File(args.AwsKey, args.AwsSecret,
-		cfg.S3Region, cfg.S3Bucket, srcKey,
-		cfg.S3Region, cfg.S3Bucket, dstKey)
+	// t, _ = time.Parse(time.RFC3339, "2006-01-02T15:04:05Z")
 
+	src := forwarder.S3Ptr{
+		Region: cfg.S3Region,
+		Bucket: cfg.S3Bucket,
+		Key:    srcKey,
+	}
+
+	dst := forwarder.S3Ptr{
+		Region: cfg.S3Region,
+		Bucket: cfg.S3Bucket,
+		Key:    dstKey,
+	}
+
+	err = forwarder.ForwardS3File(src, dst)
 	require.NoError(t, err)
 
 	buf := aws.NewWriteAtBuffer([]byte{})

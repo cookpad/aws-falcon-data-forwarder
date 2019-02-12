@@ -20,7 +20,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: build
-      Handler: receiver
+      Handler: main
       Runtime: go1.x
       Timeout: 300
       MemorySize: 1024

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 
@@ -40,15 +40,48 @@ func handleRequest(ctx context.Context, event struct{}) error {
 	return Handler(args)
 }
 
+type awsCredential struct {
+	key    string
+	secret string
+}
+
+type S3Ptr struct {
+	Region     string
+	Bucket     string
+	Key        string
+	credential *awsCredential
+}
+
 func Handler(args Args) error {
 	forwardMessage := func(msg *FalconMessage) error {
-		// log.Printf("message = %v\n", msg)
+		t := time.Unix(int64(msg.Timestamp/1000), 0)
+
 		for _, f := range msg.Files {
 			logger.WithField("f", f).Info("forwarding")
 
-			ForwardS3File(args.AwsKey, args.AwsSecret,
-				falconAwsRegion, msg.Bucket, f.Path,
-				args.S3Region, args.S3Bucket, args.S3Prefix+f.Path)
+			src := S3Ptr{
+				Region: falconAwsRegion,
+				Bucket: msg.Bucket,
+				Key:    f.Path,
+				credential: &awsCredential{
+					key:    args.FalconAwsKey,
+					secret: args.FalconAwsSecret,
+				},
+			}
+			dst := S3Ptr{
+				Region: args.S3Region,
+				Bucket: args.S3Bucket,
+				Key: strings.Join([]string{
+					args.S3Prefix,
+					t.Format("2006/01/02/15/"),
+					f.Path,
+				}, ""),
+			}
+
+			err := ForwardS3File(src, dst)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -110,8 +143,6 @@ type Args struct {
 	S3Bucket        string
 	S3Prefix        string
 	S3Region        string
-	AwsKey          string
-	AwsSecret       string
 	SqsURL          string
 	FalconAwsKey    string `json:"falcon_aws_key"`
 	FalconAwsSecret string `json:"falcon_aws_secret"`
@@ -190,7 +221,7 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 			return errors.Wrap(err, "SQS recv error")
 		}
 
-		log.Printf("recv queue, messages = %d", len(result.Messages))
+		logger.WithField("result", result).Info("recv queue")
 
 		if len(result.Messages) == 0 {
 			break
@@ -221,11 +252,12 @@ func ReceiveMessages(sqsURL, awsKey, awsSecret string, msgHandler func(msg *Falc
 	return nil
 }
 
-func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, dstBucket, dstKey string) error {
+func ForwardS3File(src, dst S3Ptr) error {
+	cfg := aws.Config{Region: aws.String(src.Region)}
+	if src.credential != nil {
+		cfg.Credentials = credentials.NewStaticCredentials(src.credential.key,
+			src.credential.secret, "")
 
-	cfg := aws.Config{Region: aws.String(srcRegion)}
-	if awsKey != "" && awsSecret != "" {
-		cfg.Credentials = credentials.NewStaticCredentials(awsKey, awsSecret, "")
 	} else {
 		logger.Warn("AWS Key and secret are not set, use role permission")
 	}
@@ -233,8 +265,8 @@ func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, d
 	// Download
 	downSrv := s3.New(session.Must(session.NewSession(&cfg)))
 	getInput := &s3.GetObjectInput{
-		Bucket: aws.String(srcBucket),
-		Key:    aws.String(srcKey),
+		Bucket: aws.String(src.Bucket),
+		Key:    aws.String(src.Key),
 	}
 
 	getResult, err := downSrv.GetObject(getInput)
@@ -244,12 +276,12 @@ func ForwardS3File(awsKey, awsSecret, srcRegion, srcBucket, srcKey, dstRegion, d
 
 	// Upload
 	dstSsn := session.Must(session.NewSession(&aws.Config{
-		Region: aws.String(dstRegion),
+		Region: aws.String(dst.Region),
 	}))
 	uploader := s3manager.NewUploader(dstSsn)
 	_, err = uploader.Upload(&s3manager.UploadInput{
-		Bucket: aws.String(dstBucket),
-		Key:    aws.String(dstKey),
+		Bucket: aws.String(dst.Bucket),
+		Key:    aws.String(dst.Key),
 		Body:   getResult.Body,
 	})
 	if err != nil {
