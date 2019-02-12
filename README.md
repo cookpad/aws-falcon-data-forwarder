@@ -11,83 +11,65 @@ This lambda function receives SQS message(s) from Data Replicator of CrowdStrike
 ## Prerequisite
 
 - Tools
-  - go >= 1.10.3
-  - mage https://github.com/magefile/mage
-  - dep https://github.com/golang/dep
+  - go >= 1.11
   - aws-cli https://github.com/aws/aws-cli
 - Your AWS resources
   - AWS Credential for CLI (like `~/.aws/credentials` )
   - S3 bucket for log data (e.g. `my-log-bucket` )
   - S3 bucket for lambda function code (e.g. `my-function-code` )
-  - KMS key (e.g. `arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx` )
+  - Secrets of Secrets Manager to store AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for data replicator.
   - IAM role for Lambda function (e.g. `arn:aws:iam::1234567890:role/LambdaFalconDataForwarder`)
-    - s3::PutObject for `my-log-bucket` 
-    - kms:Decrypt for `arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx`
+    - s3::PutObject for `my-log-bucket`
+    - secretsmanager:GetSecretValue
 
 Make sure that you need CrowdStrike Falcon and Data Replicator service.
 
 ## Setup
 
-### Encrypt AWS API Key and Secret
+### Setting up AWS Secrets Manager
 
-You need to encrypt AWS API Key (AWS_ACCESS_KEY_ID) and Secret (AWS_SECRET_ACCESS_KEY) provided CrowdStrike Falcon. Assuming AWS_ACCESS_KEY_ID is `ABCDEFG` and AWS_ACCESS_KEY_ID is `STUVWXYZ`.
+You need to put AWS API Key (AWS_ACCESS_KEY_ID) and Secret (AWS_SECRET_ACCESS_KEY) provided by CrowdStrike Falcon as secrets of Secrets Manager. Assuming AWS_ACCESS_KEY_ID is `ABCDEFG` and AWS_ACCESS_KEY_ID is `STUVWXYZ`. You can set up the secret by [AWS web console](https://ap-northeast-1.console.aws.amazon.com/secretsmanager).
 
-```sh
-$ aws kms encrypt --key-id arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx --plaintext 'ABCDEFG'
-{
-    "CiphertextBlob": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX==",
-    "KeyId": "arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx"
-}
-$ aws kms encrypt --key-id arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx --plaintext 'STUVWXYZ'
-{
-    "CiphertextBlob": "YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY==",
-    "KeyId": "arn:aws:kms:ap-northeast-1:1234567890:key/e35cda0e-xxxx-xxxx-xxxx-xxxxxxxxxxxxx"
-}
-```
+You need to create 2 items in the secret.
 
-Copy text in `CiphertextBlob`.
+- `falcon_aws_key`: set AWS_ACCESS_KEY_ID provided by CrowdStrike Falcon
+- `falcon_aws_secret`: set AWS_SECRET_ACCESS_KEY provided by CrowdStrike Falcon
 
 ### Configure
 
-Prepare a configuration file. (e.g. `myconfig.cfg` ) Please see a following sample.
+Prepare a configuration file. (e.g. `myconfig.json` ) Please see a following sample.
 
-```conf
-StackName=falcon-data-forwarder-staging
-CodeS3Bucket=my-function-code
-CodeS3Prefix=functions
-CodeS3Region=ap-northeast-1
+```json
+{
+    "StackName": "falcon-data-forwarder-staging",
+    "Region": "ap-northeast-1",
+    "CodeS3Bucket": "my-function-code",
+    "CodeS3Prefix": "functions",
 
-RoleArn=arn:aws:iam::1234567890:role/LambdaFalconDataForwarder
-S3Bucket=my-log-bucket
-S3Prefix=logs/
-S3Region=ap-northeast-1
-SqsURL=https://us-west-1.queue.amazonaws.com/xxxxxxxxxxxxxx/some-queue-name
-EncSqsAwsKey=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX==
-EncSqsAwsSecret=YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY==
+    "RoleArn": "arn:aws:iam::1234567890:role/LambdaFalconDataForwarder",
+    "S3Bucket": "my-log-bucket",
+    "S3Prefix": "logs/",
+    "S3Region": "ap-northeast-1",
+    "SqsURL": "https://us-west-1.queue.amazonaws.com/xxxxxxxxxxxxxx/some-queue-name",
+    "SecretArn": "arn:aws:secretsmanager:ap-northeast-1:1234567890:secret:your-secret-name-4UqOs6"
+}
 ```
 
 - Management
   - `StackName`: CloudFormation(CFn) stack name
+  - `Region`: AWS region where you want to deploy the stack
   - `CodeS3Bucket`: S3 bucket name to save binary for lambda function
-  - `CodeS3Prefix`: Prefix of S3 Key to save binary for lambda function- 
-  - `CodeS3Region`: AWS region of `CodeS3Bucket`
+  - `CodeS3Prefix`: Prefix of S3 Key to save binary for lambda function
 - Parameters
   - `RoleArn`: IAM Role ARN for Lambda function
   - `S3Bucket`: S3 Bucket name to save log data
   - `S3Prefix`: Prefix of S3 Key to save log data
   - `S3Regio`: AWS region of `S3Bucket`
   - `SqsURL`: SQS URL provided by CrowdStrike Falcon
-  - `EncSqsAwsKey`: Encrypted AWS API Key provided by CrowdStrike Falcon
-  - `EncSqsAwsSecret`: Encrypted AWS Secret Key provided by CrowdStrike Falcon
+  - `SecretArn`: ARN of the secret that you store AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 
 ### Deploy
 
-```
-$ env PARAM_FILE=myconfig.cfg mage -v deploy
-Running target: Deploy
-Bulding  receiver
-[config/staging.cfg] Packaging...
-[config/staging.cfg] Generated template file: /var/folders/3_/nv_wpjw173vgvd3ct4vzjp2r0000gp/T/slam_template_414805156
-[config/staging.cfg] Deploy...
-[config/staging.cfg] Done!
+```bash
+$ env FORWARDER_CONFIG=myconfig.cfg make deploy
 ```
