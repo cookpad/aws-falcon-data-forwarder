@@ -73,3 +73,8 @@ Prepare a configuration file. (e.g. `myconfig.json` ) Please see a following sam
 ```bash
 $ env FORWARDER_CONFIG=myconfig.cfg make deploy
 ```
+
+## License
+
+MIT License
+
