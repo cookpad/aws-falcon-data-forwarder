@@ -21,6 +21,8 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/sirupsen/logrus"
+
+	_ "github.com/GoogleCloudPlatform/berglas/pkg/auto"
 )
 
 var logger = logrus.New()
@@ -124,19 +126,14 @@ func getSecretValues(secretArn string, values interface{}) error {
 
 // BuildArgs builds argument of receiver from environment variables.
 func BuildArgs() (Args, error) {
-	args := Args{
-		S3Bucket: os.Getenv("S3_BUCKET"),
-		S3Prefix: os.Getenv("S3_PREFIX"),
-		S3Region: os.Getenv("S3_REGION"),
-		SqsURL:   os.Getenv("SQS_URL"),
-	}
-
-	err := getSecretValues(os.Getenv("SECRET_ARN"), &args)
-	if err != nil {
-		return args, errors.Wrap(err, "Fail to retrieve secret values")
-	}
-
-	return args, nil
+	return Args{
+		S3Bucket:        os.Getenv("S3_BUCKET"),
+		S3Prefix:        os.Getenv("S3_PREFIX"),
+		S3Region:        os.Getenv("S3_REGION"),
+		SqsURL:          os.Getenv("SQS_URL"),
+		FalconAwsKey:    os.Getenv("FALCON_AWS_KEY"),
+		FalconAwsSecret: os.Getenv("FALCON_AWS_SECRET"), // Get value from Secret Manager via berglas
+	}, nil
 }
 
 type Args struct {
